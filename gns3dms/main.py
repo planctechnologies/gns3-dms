@@ -24,7 +24,7 @@
 # number has been incremented)
 
 """
-Monitors communication with the GNS3 client. Will terminate the instance if 
+Monitors communication with the GNS3 client via tmp file. Will terminate the instance if 
 communication is lost.
 """
 
@@ -37,6 +37,7 @@ import logging
 import fcntl
 import signal
 import configparser
+from logging.handlers import *
 
 SCRIPT_NAME = os.path.basename(__file__)
 
@@ -72,8 +73,10 @@ Options:
   --cloud_api_key <api_key>  Rackspace API key           
   --cloud_user_name
   
-  --deadtime          How long can the communication lose exist before we 
-                      shutdown this instance.
+  --deadtime          How long in minutes can the communication lose exist before we 
+                      shutdown this instance. Example --deadtime=30 (30 minutes)
+
+  --file              The file we monitor for updates
 
   -k                  Kill previous instance running in background
   --background        Run in background
@@ -88,13 +91,14 @@ def parse_cmd_line(argv):
     argv: Pass in cmd line arguments
     """
 
-    short_args = "dvhk:"
+    short_args = "dvhk"
     long_args = ("debug",
                     "verbose",
                     "help",
                     "cloud_user_name=",
                     "cloud_api_key=",
                     "deadtime=",
+                    "file=",
                     "background",
                     )
     try:
@@ -109,9 +113,19 @@ def parse_cmd_line(argv):
     cmd_line_option_list["verbose"] = True
     cmd_line_option_list["cloud_user_name"] = None
     cmd_line_option_list["cloud_api_key"] = None
-    cmd_line_option_list["deadtime"] = 30 #minutes
+    cmd_line_option_list["deadtime"] = 30 * 60 #minutes
+    cmd_line_option_list["file"] = None
     cmd_line_option_list["shutdown"] = False
     cmd_line_option_list["daemon"] = False
+    cmd_line_option_list['starttime'] = datetime.datetime.now()
+
+    if sys.platform == "linux":
+        cmd_line_option_list['syslog'] = "/dev/log"
+    elif sys.platform == "osx":
+        cmd_line_option_list['syslog'] = "/var/run/syslog"
+    else:
+        cmd_line_option_list['syslog'] = ('localhost',514)
+
 
     get_gns3secrets(cmd_line_option_list)
 
@@ -128,7 +142,7 @@ def parse_cmd_line(argv):
         elif (opt in ("--cloud_api_key")):
             cmd_line_option_list["cloud_api_key"] = val
         elif (opt in ("--deadtime")):
-            cmd_line_option_list["deadtime"] = val
+            cmd_line_option_list["deadtime"] = int(val) * 60
         elif (opt in ("-k")):
             cmd_line_option_list["shutdown"] = True
         elif (opt in ("--background")):
@@ -186,12 +200,18 @@ def set_logging(cmd_options):
         log_level = logging.DEBUG
 
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    sys_formatter = logging.Formatter('%(name)s - %(levelname)s - %(message)s')
 
     console_log = logging.StreamHandler()
     console_log.setLevel(log_level_console)
     console_log.setFormatter(formatter)
 
-    syslog_hndlr = logging.SysLogHandler(facility=LOG_KERN)
+    syslog_hndlr = SysLogHandler(
+        address=cmd_options['syslog'],
+        facility=SysLogHandler.LOG_KERN
+    )
+
+    syslog_hndlr.setFormatter(sys_formatter)
     
     log.setLevel(log_level)
     log.addHandler(console_log)
@@ -207,6 +227,15 @@ def send_shutdown(pid_file):
 
     os.kill(pid, 15)
 
+def monitor_loop(options):
+    while options['shutdown'] == False:
+        log.debug("In monitor_loop for : %s" % (
+            datetime.datetime.now() - options['starttime'])
+        )
+
+        time.sleep(2)
+
+
 def main():
 
     global log
@@ -220,7 +249,12 @@ def main():
         the log vars.
         """
 
-        log.warning("Received shutdown signal")
+        log.info("Received shutdown signal")
+        #options["shutdown"] = True
+
+        if options["daemon"]:
+            log.info("Stopping background process")
+            my_daemon.stop()
         
 
     pid_file = "%s/%s.pid" % (SCRIPT_PATH, SCRIPT_NAME)
@@ -237,21 +271,20 @@ def main():
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
 
+    log.info("Starting ...")
     log.debug("Using settings:")
     for key, value in iter(sorted(options.items())):
         log.debug("%s : %s" % (key, value))
-    
-    log.warning("Starting ...")
 
     if my_daemon:
         my_daemon.start()
     else:
-        pass
+        monitor_loop(options)
 
 
 class MyDaemon(daemon.daemon):
     def run(self):
-        pass
+        monitor_loop(self.options)
 
 
 
