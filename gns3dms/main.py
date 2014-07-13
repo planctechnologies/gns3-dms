@@ -292,8 +292,14 @@ def monitor_loop(options):
 
         if delta.seconds > options["deadtime"]:
             log.warning("Deadtime exceeded, terminating instance ...")
-            rksp = Rackspace(options)
-            rksp.terminate()
+            #Terminate involes many layers of HTTP / API calls, lots of 
+            #different errors types could occur here.
+            try:
+                rksp = Rackspace(options)
+                rksp.terminate()
+            except Exception as e:
+                log.critical("Exception during terminate: %s" % (e))
+
             terminate_attempts+=1
             log.warning("Termination sent, attempt: %s" % (terminate_attempts))
 
