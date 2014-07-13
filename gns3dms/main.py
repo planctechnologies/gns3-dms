@@ -74,7 +74,13 @@ Options:
   --cloud_user_name
   
   --deadtime          How long in minutes can the communication lose exist before we 
-                      shutdown this instance. Example --deadtime=30 (30 minutes)
+                      shutdown this instance. 
+                      Default: 
+                      Example --deadtime=30 (30 minutes)
+
+  --init-wait         Inital wait time, how long before we start pulling the file.
+                      Default: 5 min (300 seconds)
+                      Example --init-wait=5
 
   --file              The file we monitor for updates
 
@@ -98,6 +104,7 @@ def parse_cmd_line(argv):
                     "cloud_user_name=",
                     "cloud_api_key=",
                     "deadtime=",
+                    "init-wait=",
                     "file=",
                     "background",
                     )
@@ -113,7 +120,8 @@ def parse_cmd_line(argv):
     cmd_line_option_list["verbose"] = True
     cmd_line_option_list["cloud_user_name"] = None
     cmd_line_option_list["cloud_api_key"] = None
-    cmd_line_option_list["deadtime"] = 30 * 60 #minutes
+    cmd_line_option_list["deadtime"] = 60 * 60 #minutes
+    cmd_line_option_list["init-wait"] = 5 * 60
     cmd_line_option_list["file"] = None
     cmd_line_option_list["shutdown"] = False
     cmd_line_option_list["daemon"] = False
@@ -143,6 +151,8 @@ def parse_cmd_line(argv):
             cmd_line_option_list["cloud_api_key"] = val
         elif (opt in ("--deadtime")):
             cmd_line_option_list["deadtime"] = int(val) * 60
+        elif (opt in ("--init-wait")):
+            cmd_line_option_list["init-wait"] = int(val) * 60
         elif (opt in ("-k")):
             cmd_line_option_list["shutdown"] = True
         elif (opt in ("--background")):
@@ -228,12 +238,20 @@ def send_shutdown(pid_file):
     os.kill(pid, 15)
 
 def monitor_loop(options):
+
+    log.debug("Waiting for init-wait to pass: %s" % (options["init-wait"]))
+    time.sleep(options["init-wait"])
+    
+    log.info("Starting monitor_loop")
     while options['shutdown'] == False:
         log.debug("In monitor_loop for : %s" % (
             datetime.datetime.now() - options['starttime'])
         )
 
         time.sleep(2)
+
+    log.info("Leaving monitor_loop")
+    log.info("Shutting down")
 
 
 def main():
@@ -250,11 +268,7 @@ def main():
         """
 
         log.info("Received shutdown signal")
-        #options["shutdown"] = True
-
-        if options["daemon"]:
-            log.info("Stopping background process")
-            my_daemon.stop()
+        options["shutdown"] = True
         
 
     pid_file = "%s/%s.pid" % (SCRIPT_PATH, SCRIPT_NAME)
