@@ -50,7 +50,10 @@ if not SCRIPT_PATH:
 
 
 EXTRA_LIB = "%s/modules" % (SCRIPT_PATH)
+sys.path.append(EXTRA_LIB)
 
+from . import cloud
+from rackspace_cloud import Rackspace
 
 LOG_NAME = "gns3dms"
 log = None
@@ -73,14 +76,16 @@ Options:
   --cloud_api_key <api_key>  Rackspace API key           
   --cloud_user_name
   
-  --deadtime          How long in minutes can the communication lose exist before we 
+  --deadtime          How long in seconds can the communication lose exist before we 
                       shutdown this instance. 
                       Default: 
-                      Example --deadtime=30 (30 minutes)
+                      Example --deadtime=3600 (60 minutes)
+
+  --check-interval    Defaults to --deadtime, used for debugging
 
   --init-wait         Inital wait time, how long before we start pulling the file.
-                      Default: 5 min (300 seconds)
-                      Example --init-wait=5
+                      Default: 300 (5 min)
+                      Example --init-wait=300
 
   --file              The file we monitor for updates
 
@@ -105,6 +110,7 @@ def parse_cmd_line(argv):
                     "cloud_api_key=",
                     "deadtime=",
                     "init-wait=",
+                    "check-interval=",
                     "file=",
                     "background",
                     )
@@ -121,6 +127,7 @@ def parse_cmd_line(argv):
     cmd_line_option_list["cloud_user_name"] = None
     cmd_line_option_list["cloud_api_key"] = None
     cmd_line_option_list["deadtime"] = 60 * 60 #minutes
+    cmd_line_option_list["check-interval"] = None
     cmd_line_option_list["init-wait"] = 5 * 60
     cmd_line_option_list["file"] = None
     cmd_line_option_list["shutdown"] = False
@@ -150,13 +157,20 @@ def parse_cmd_line(argv):
         elif (opt in ("--cloud_api_key")):
             cmd_line_option_list["cloud_api_key"] = val
         elif (opt in ("--deadtime")):
-            cmd_line_option_list["deadtime"] = int(val) * 60
+            cmd_line_option_list["deadtime"] = int(val)
+        elif (opt in ("--check-interval")):
+            cmd_line_option_list["check-interval"] = int(val)
         elif (opt in ("--init-wait")):
-            cmd_line_option_list["init-wait"] = int(val) * 60
+            cmd_line_option_list["init-wait"] = int(val)
+        elif (opt in ("--file")):
+            cmd_line_option_list["file"] = val
         elif (opt in ("-k")):
             cmd_line_option_list["shutdown"] = True
         elif (opt in ("--background")):
             cmd_line_option_list["daemon"] = True
+
+    if cmd_line_option_list["check-interval"] is None:
+        cmd_line_option_list["check-interval"] = cmd_line_option_list["deadtime"] + 120
 
     if cmd_line_option_list["cloud_user_name"] is None:
         print("You need to specify a username!!!!")
@@ -165,6 +179,11 @@ def parse_cmd_line(argv):
 
     if cmd_line_option_list["cloud_api_key"] is None:
         print("You need to specify an apikey!!!!")
+        print(usage)
+        sys.exit(2)
+
+    if cmd_line_option_list["file"] is None:
+        print("You need to specify a file to watch!!!!")
         print(usage)
         sys.exit(2)
 
@@ -196,7 +215,9 @@ def get_gns3secrets(cmd_line_option_list):
 
 def set_logging(cmd_options):
     """
-    Setup logging and format output
+    Setup logging and format output for console and syslog
+
+    Syslog is using the KERN facility
     """
     log = logging.getLogger("%s" % (LOG_NAME))
     log_level = logging.INFO
@@ -230,6 +251,9 @@ def set_logging(cmd_options):
     return log
 
 def send_shutdown(pid_file):
+    """
+    Sends the daemon process a kill signal
+    """
     with open(pid_file, 'r') as pidf:
         pid = int(pidf.readline().strip())
         pidf.close()
@@ -237,18 +261,48 @@ def send_shutdown(pid_file):
 
     os.kill(pid, 15)
 
+def _get_file_age(filename):
+    return datetime.datetime.fromtimestamp(
+                os.path.getmtime(filename)
+            )
+
 def monitor_loop(options):
+    """
+    Checks the options["file"] modification time against an interval. If the
+    modification time is too old we terminate the instance.
+    """
 
     log.debug("Waiting for init-wait to pass: %s" % (options["init-wait"]))
     time.sleep(options["init-wait"])
-    
+
     log.info("Starting monitor_loop")
+
+    terminate_attempts = 0
+
     while options['shutdown'] == False:
         log.debug("In monitor_loop for : %s" % (
             datetime.datetime.now() - options['starttime'])
         )
 
-        time.sleep(2)
+        file_last_modified = _get_file_age(options["file"])
+        now = datetime.datetime.now()
+
+        delta = now - file_last_modified
+        log.debug("File last updated: %s seconds ago" % (delta.seconds))
+
+        if delta.seconds > options["deadtime"]:
+            log.warning("Deadtime exceeded, terminating instance ...")
+            rksp = Rackspace(options)
+            rksp.terminate()
+            terminate_attempts+=1
+            log.warning("Termination sent, attempt: %s" % (terminate_attempts))
+
+        if terminate_attempts > 3:
+            log.critical("Termination attempts failed")
+            log.critical("Attempting to shutdown OS")
+            os.system("shutdown -h now")
+
+        time.sleep(options["check-interval"])
 
     log.info("Leaving monitor_loop")
     log.info("Shutting down")
@@ -278,7 +332,6 @@ def main():
         sys.exit(0)
 
     if options["daemon"]:
-        print("Starting in background ...\n")
         my_daemon = MyDaemon(pid_file, options)
 
     # Setup signal to catch Control-C / SIGINT and SIGTERM
@@ -289,6 +342,17 @@ def main():
     log.debug("Using settings:")
     for key, value in iter(sorted(options.items())):
         log.debug("%s : %s" % (key, value))
+
+
+    log.debug("Checking file ....")
+    if os.path.isfile(options["file"]) == False:
+        log.critical("File does not exist!!!")
+        sys.exit(1)
+
+    test_acess = _get_file_age(options["file"])
+    if type(test_acess) is not datetime.datetime:
+        log.critical("Can't get file modification time!!!")
+        sys.exit(1)
 
     if my_daemon:
         my_daemon.start()

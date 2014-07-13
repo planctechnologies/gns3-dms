@@ -1,3 +1,5 @@
 jsonschema
 pycurl
 python-dateutil
+apache-libcloud
+requests
