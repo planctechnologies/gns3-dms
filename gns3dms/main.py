@@ -34,10 +34,10 @@ import time
 import getopt
 import datetime
 import logging
-import fcntl
 import signal
 import configparser
 from logging.handlers import *
+from os.path import expanduser
 
 SCRIPT_NAME = os.path.basename(__file__)
 
@@ -75,6 +75,8 @@ Options:
 
   --cloud_api_key <api_key>  Rackspace API key           
   --cloud_user_name
+
+  --instance_id       ID of the Rackspace instance to terminate
   
   --deadtime          How long in seconds can the communication lose exist before we 
                       shutdown this instance. 
@@ -108,6 +110,7 @@ def parse_cmd_line(argv):
                     "help",
                     "cloud_user_name=",
                     "cloud_api_key=",
+                    "instance_id=",
                     "deadtime=",
                     "init-wait=",
                     "check-interval=",
@@ -126,6 +129,7 @@ def parse_cmd_line(argv):
     cmd_line_option_list["verbose"] = True
     cmd_line_option_list["cloud_user_name"] = None
     cmd_line_option_list["cloud_api_key"] = None
+    cmd_line_option_list["instance_id"] = None
     cmd_line_option_list["deadtime"] = 60 * 60 #minutes
     cmd_line_option_list["check-interval"] = None
     cmd_line_option_list["init-wait"] = 5 * 60
@@ -156,6 +160,8 @@ def parse_cmd_line(argv):
             cmd_line_option_list["cloud_user_name"] = val
         elif (opt in ("--cloud_api_key")):
             cmd_line_option_list["cloud_api_key"] = val
+        elif (opt in ("--instance_id")):
+            cmd_line_option_list["instance_id"] = val
         elif (opt in ("--deadtime")):
             cmd_line_option_list["deadtime"] = int(val)
         elif (opt in ("--check-interval")):
@@ -169,23 +175,30 @@ def parse_cmd_line(argv):
         elif (opt in ("--background")):
             cmd_line_option_list["daemon"] = True
 
-    if cmd_line_option_list["check-interval"] is None:
-        cmd_line_option_list["check-interval"] = cmd_line_option_list["deadtime"] + 120
+    if cmd_line_option_list["shutdown"] == False:
 
-    if cmd_line_option_list["cloud_user_name"] is None:
-        print("You need to specify a username!!!!")
-        print(usage)
-        sys.exit(2)
+        if cmd_line_option_list["check-interval"] is None:
+            cmd_line_option_list["check-interval"] = cmd_line_option_list["deadtime"] + 120
 
-    if cmd_line_option_list["cloud_api_key"] is None:
-        print("You need to specify an apikey!!!!")
-        print(usage)
-        sys.exit(2)
+        if cmd_line_option_list["cloud_user_name"] is None:
+            print("You need to specify a username!!!!")
+            print(usage)
+            sys.exit(2)
 
-    if cmd_line_option_list["file"] is None:
-        print("You need to specify a file to watch!!!!")
-        print(usage)
-        sys.exit(2)
+        if cmd_line_option_list["cloud_api_key"] is None:
+            print("You need to specify an apikey!!!!")
+            print(usage)
+            sys.exit(2)
+
+        if cmd_line_option_list["file"] is None:
+            print("You need to specify a file to watch!!!!")
+            print(usage)
+            sys.exit(2)
+
+        if cmd_line_option_list["instance_id"] is None:
+            print("You need to specify an instance_id")
+            print(usage)
+            sys.exit(2)
 
     return cmd_line_option_list
 
@@ -254,12 +267,15 @@ def send_shutdown(pid_file):
     """
     Sends the daemon process a kill signal
     """
-    with open(pid_file, 'r') as pidf:
-        pid = int(pidf.readline().strip())
-        pidf.close()
+    try:
+        with open(pid_file, 'r') as pidf:
+            pid = int(pidf.readline().strip())
+            pidf.close()
+            os.kill(pid, 15)
+    except:
+        log.info("No running instance found!!!")
+        log.info("Missing PID file: %s" % (pid_file))
 
-
-    os.kill(pid, 15)
 
 def _get_file_age(filename):
     return datetime.datetime.fromtimestamp(
@@ -302,13 +318,9 @@ def monitor_loop(options):
 
             terminate_attempts+=1
             log.warning("Termination sent, attempt: %s" % (terminate_attempts))
-
-        if terminate_attempts > 3:
-            log.critical("Termination attempts failed")
-            log.critical("Attempting to shutdown OS")
-            os.system("shutdown -h now")
-
-        time.sleep(options["check-interval"])
+            time.sleep(600)
+        else:
+            time.sleep(options["check-interval"])
 
     log.info("Leaving monitor_loop")
     log.info("Shutting down")
@@ -330,8 +342,7 @@ def main():
         log.info("Received shutdown signal")
         options["shutdown"] = True
         
-
-    pid_file = "%s/%s.pid" % (SCRIPT_PATH, SCRIPT_NAME)
+    pid_file = "%s/.gns3ias.pid" % (expanduser("~"))
 
     if options["shutdown"]:
         send_shutdown(pid_file)

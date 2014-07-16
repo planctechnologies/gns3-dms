@@ -40,9 +40,10 @@ class Rackspace(object):
         self.apikey = options["cloud_api_key"]
         self.authenticated = False
         self.hostname = socket.gethostname()
-        self.hostname = "Cloud-Server-01"
+        self.instance_id = options["instance_id"]
 
         log.debug("Authenticating with Rackspace")
+        log.debug("My hostname: %s" % (self.hostname))
         self.rksp = RackspaceCtrl(self.username, self.apikey)
         self.authenticated = self.rksp.authenticate()
 
@@ -55,8 +56,10 @@ class Rackspace(object):
             log.debug("Checking region: %s" % (region_k))
             self.rksp.set_region(region_v)
             for server in self.rksp.list_instances():
-                if server.name == self.hostname:
+                log.debug("Checking server: %s" % (server.name))
+                if server.name.lower() == self.hostname.lower() and server.id == self.instance_id:
                     log.info("Found matching instance: %s" % (server.id))
+                    log.info("Startup id: %s" % (self.instance_id))
                     return server
 
     def terminate(self):
