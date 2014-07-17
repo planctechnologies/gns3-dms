@@ -52,6 +52,9 @@ class Rackspace(object):
         if self.authenticated == False:
             log.critical("Not authenticated against rackspace!!!!")
 
+        for region in self.rksp.list_regions():
+            log.debug("Rackspace regions: %s" % (region))
+            
         log.debug("Checking region: %s" % (self.region))
         self.rksp.set_region(self.region)
         for server in self.rksp.list_instances():
