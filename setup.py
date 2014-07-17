@@ -45,7 +45,6 @@ setup(
     description="GNS3 Deadman Switch",
     long_description=open("README.rst", "r").read(),
     install_requires=[
-        "python3-dev",
         "jsonschema==2.3.0",
         "pycurl>=7.19.3.1",
         "python-dateutil>=2.2",
